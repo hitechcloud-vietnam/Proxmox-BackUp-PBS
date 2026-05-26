@@ -1,0 +1,1348 @@
+{
+  "info": {
+    "name": "Proxmox Backup Server (PBS) — Full API Collection",
+    "description": "Collection đầy đủ cho Proxmox Backup Server REST API\n\nNguồn:\n- https://pbs.proxmox.com/docs/api-viewer/index.html\n- https://pbs.proxmox.com/docs/backup-protocol.html\n\n🔌 Port mặc định: 8007 (HTTPS)\n🔐 Auth: PBSAPIToken=user@realm!tokenname:secret\n   HOẶC: Cookie ticket-based (Login trước)\n\n📦 Modules:\n1. 🔐 Auth (Ticket login, API Tokens)\n2. 📊 Status & Nodes\n3. 🗄️ Admin — Datastores\n4. 📦 Admin — Snapshots & Groups\n5. 🔧 Admin — Maintenance (GC, Verify, Prune)\n6. 📡 Admin — Sync & Remote\n7. 👥 Access (Users, ACL, Roles)\n8. ⚙️ Config (Datastore, Network, Notifications)\n9. 📼 Tape Backup\n10. 🔁 Backup Protocol (HTTP/2 upgrade)\n11. 📖 Reader Protocol (HTTP/2 upgrade)\n\n⚠️ NOTE: Port 8007, thường dùng self-signed cert → thêm --insecure\nAPI Token format: PBSAPIToken=user@realm!tokenname:tokensecret",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "pbs-api-full-2026"
+  },
+  "variable": [
+    { "key": "pbs_host",     "value": "https://192.168.1.100:8007", "description": "PBS server URL (protocol + IP/hostname + port 8007)" },
+    { "key": "token_id",     "value": "root@pam!mytoken",           "description": "API Token ID — format: user@realm!tokenname" },
+    { "key": "token_secret", "value": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", "description": "API Token secret (UUID)" },
+    { "key": "username",     "value": "root@pam",                   "description": "Username để login ticket-based" },
+    { "key": "password",     "value": "your_password",              "description": "Password để login ticket-based" },
+    { "key": "ticket",       "value": "",                           "description": "PBS Auth Ticket — auto-set sau Login" },
+    { "key": "csrf_token",   "value": "",                           "description": "CSRF Prevention Token — auto-set sau Login" },
+    { "key": "datastore",    "value": "mystore",                    "description": "Tên datastore" },
+    { "key": "namespace",    "value": "",                           "description": "Namespace trong datastore (để trống = root)" },
+    { "key": "backup_type",  "value": "vm",                         "description": "vm | ct | host" },
+    { "key": "backup_id",    "value": "100",                        "description": "VM ID hoặc hostname" },
+    { "key": "backup_time",  "value": "0",                          "description": "Unix timestamp của snapshot" },
+    { "key": "node",         "value": "localhost",                  "description": "Node name (thường là 'localhost' trên PBS)" },
+    { "key": "remote",       "value": "",                           "description": "Remote name cho sync jobs" },
+    { "key": "sync_job_id",  "value": "",                           "description": "Sync job ID" },
+    { "key": "prune_job_id", "value": "",                           "description": "Prune job ID" },
+    { "key": "verify_job_id","value": "",                           "description": "Verification job ID" },
+    { "key": "userid",       "value": "newuser@pbs",                "description": "User ID cho access management" },
+    { "key": "upid",         "value": "",                           "description": "UPID của task để xem log" }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "value", "value": "PBSAPIToken={{token_id}}:{{token_secret}}", "type": "string" },
+      { "key": "key",   "value": "Authorization",                              "type": "string" },
+      { "key": "in",    "value": "header",                                     "type": "string" }
+    ]
+  },
+  "item": [
+
+    {
+      "name": "🔐 Auth",
+      "description": "Hai phương thức xác thực PBS:\n1. API Token (khuyến nghị cho automation): PBSAPIToken=user@realm!tokenname:secret\n2. Ticket-based (session): Login → nhận ticket → dùng cookie PBS-TICKET",
+      "item": [
+        {
+          "name": "Login (Ticket-based Auth)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "if (json.data) {",
+                  "  pm.environment.set('ticket',     json.data.ticket);",
+                  "  pm.environment.set('csrf_token', json.data.CSRFPreventionToken);",
+                  "  console.log('✅ Ticket saved. Use Cookie: PBS-TICKET=<ticket>');",
+                  "  console.log('✅ CSRF Token saved for PUT/POST/DELETE');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/access/ticket",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2", "json", "access", "ticket"]
+            },
+            "description": "Đăng nhập để lấy ticket auth.\n\n**Response:**\n- `ticket`: dùng làm Cookie `PBS-TICKET=<ticket>`\n- `CSRFPreventionToken`: bắt buộc cho PUT/POST/DELETE\n\n**Ticket-based requests:**\n```\nCookie: PBS-TICKET=<ticket>\nCSRFPreventionToken: <token>\n```\n\n💡 Khuyến nghị dùng **API Token** cho automation thay vì ticket."
+          },
+          "response": []
+        },
+        {
+          "name": "Create API Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",     "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken","value": "{{csrf_token}}" },
+              { "key": "Content-Type",      "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tokenname\": \"mytoken\",\n  \"comment\": \"Automation token\",\n  \"expire\": 0\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/access/users/{{userid}}/token/mytoken",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2", "json", "access", "users", "{{userid}}", "token", "mytoken"]
+            },
+            "description": "Tạo API Token cho user.\n\n⚠️ **Lưu secret ngay** — PBS không hiển thị lại sau lần tạo!\n\n**Format khi dùng:**\n```\nAuthorization: PBSAPIToken=user@realm!tokenname:secret\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "List API Tokens",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/access/users/{{userid}}/token",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2", "json", "access", "users", "{{userid}}", "token"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete API Token",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization",     "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken","value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/access/users/{{userid}}/token/mytoken",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2", "json", "access", "users", "{{userid}}", "token", "mytoken"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "📊 Status & Node",
+      "description": "Thông tin tổng quan server, version, tasks, resources",
+      "item": [
+        {
+          "name": "Server Version",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/version", "host": ["{{pbs_host}}"], "path": ["api2","json","version"] },
+            "description": "Lấy version PBS. Không cần auth."
+          },
+          "response": []
+        },
+        {
+          "name": "Datastore Usage Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/status/datastore-usage", "host": ["{{pbs_host}}"], "path": ["api2","json","status","datastore-usage"] },
+            "description": "Tổng quan dung lượng tất cả datastore."
+          },
+          "response": []
+        },
+        {
+          "name": "Node Status (Resources)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/status", "host": ["{{pbs_host}}"], "path": ["api2","json","nodes","{{node}}","status"] },
+            "description": "CPU, RAM, disk, network stats của node."
+          },
+          "response": []
+        },
+        {
+          "name": "List Tasks",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/tasks?limit=50",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","nodes","{{node}}","tasks"],
+              "query": [
+                { "key": "limit",    "value": "50" },
+                { "key": "typefilter","value": "backup",   "disabled": true, "description": "backup | verify | prune | garbage_collection | sync" },
+                { "key": "store",    "value": "{{datastore}}", "disabled": true },
+                { "key": "since",    "value": "1700000000",   "disabled": true, "description": "Unix timestamp để lọc từ thời điểm này" },
+                { "key": "errors",   "value": "1",            "disabled": true, "description": "Chỉ hiện tasks lỗi" }
+              ]
+            },
+            "description": "Danh sách tasks (backup, GC, sync...). Hữu ích để check trạng thái backup gần nhất."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Task Log",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/tasks/{{upid}}/log",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","nodes","{{node}}","tasks","{{upid}}","log"]
+            },
+            "description": "Xem log chi tiết của một task theo UPID.\n\nUPID example: UPID:localhost:00001234:00000001:65A1B2C3:backup:vm/100:root@pam:"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Task Status",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/tasks/{{upid}}/status",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","nodes","{{node}}","tasks","{{upid}}","status"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Stop Task",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/tasks/{{upid}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","nodes","{{node}}","tasks","{{upid}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Server Subscription Info",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/subscription", "host": ["{{pbs_host}}"], "path": ["api2","json","nodes","{{node}}","subscription"] }
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "🗄️ Admin — Datastores",
+      "description": "Quản lý datastores: tạo, cấu hình, xem thống kê",
+      "item": [
+        {
+          "name": "List Datastores",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.length > 0) {",
+                  "  pm.environment.set('datastore', json.data[0].store);",
+                  "  console.log('Datastores:', json.data.map(d => d.store));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/admin/datastore", "host": ["{{pbs_host}}"], "path": ["api2","json","admin","datastore"] },
+            "description": "Danh sách tất cả datastores và thông tin cơ bản."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Datastore",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{datastore}}\",\n  \"path\": \"/mnt/pbs/{{datastore}}\",\n  \"comment\": \"New datastore\",\n  \"gc-schedule\": \"daily\",\n  \"prune-schedule\": \"daily\",\n  \"keep-last\": 7,\n  \"keep-daily\": 7,\n  \"keep-weekly\": 4,\n  \"keep-monthly\": 3\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/admin/datastore", "host": ["{{pbs_host}}"], "path": ["api2","json","admin","datastore"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Datastore Status",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/status",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","status"]
+            },
+            "description": "Dung lượng đã dùng, còn trống, tổng. Thêm `?ns=mynamespace` để xem namespace cụ thể."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Datastore Config",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"comment\": \"Updated comment\",\n  \"gc-schedule\": \"weekly\",\n  \"keep-last\": 0,\n  \"keep-daily\": 7,\n  \"keep-weekly\": 4,\n  \"keep-monthly\": 3,\n  \"keep-yearly\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Datastore",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Namespaces",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/namespace",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","namespace"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Namespace",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{namespace}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/namespace",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","namespace"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Namespace",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/namespace?ns={{namespace}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","namespace"],
+              "query": [{ "key": "ns", "value": "{{namespace}}" }]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "📦 Admin — Snapshots & Backup Groups",
+      "description": "Truy vấn, xem, xóa snapshots và backup groups",
+      "item": [
+        {
+          "name": "List Backup Groups",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/groups",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","groups"],
+              "query": [
+                { "key": "ns",             "value": "{{namespace}}", "disabled": true, "description": "Filter by namespace" },
+                { "key": "backup-type",    "value": "vm",            "disabled": true, "description": "vm | ct | host" }
+              ]
+            },
+            "description": "Danh sách backup groups trong datastore.\n\nGroup = một VM/CT/Host, chứa nhiều snapshots.\n\n**Filter bằng namespace:** `?ns=mynamespace`"
+          },
+          "response": []
+        },
+        {
+          "name": "List Snapshots",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/snapshots?backup-type={{backup_type}}&backup-id={{backup_id}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","snapshots"],
+              "query": [
+                { "key": "backup-type", "value": "{{backup_type}}", "description": "vm | ct | host (required)" },
+                { "key": "backup-id",   "value": "{{backup_id}}",   "description": "VM ID hoặc hostname (required)" },
+                { "key": "ns",          "value": "{{namespace}}",   "disabled": true }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Snapshot Details (Files)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/files?backup-type={{backup_type}}&backup-id={{backup_id}}&backup-time={{backup_time}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","files"],
+              "query": [
+                { "key": "backup-type", "value": "{{backup_type}}" },
+                { "key": "backup-id",   "value": "{{backup_id}}" },
+                { "key": "backup-time", "value": "{{backup_time}}", "description": "Unix timestamp" },
+                { "key": "ns",          "value": "{{namespace}}", "disabled": true }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Snapshot Manifest (index.json)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/manifest?backup-type={{backup_type}}&backup-id={{backup_id}}&backup-time={{backup_time}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","manifest"],
+              "query": [
+                { "key": "backup-type", "value": "{{backup_type}}" },
+                { "key": "backup-id",   "value": "{{backup_id}}" },
+                { "key": "backup-time", "value": "{{backup_time}}" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Snapshot Notes",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/notes?backup-type={{backup_type}}&backup-id={{backup_id}}&backup-time={{backup_time}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","notes"],
+              "query": [
+                { "key": "backup-type", "value": "{{backup_type}}" },
+                { "key": "backup-id",   "value": "{{backup_id}}" },
+                { "key": "backup-time", "value": "{{backup_time}}" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Snapshot Notes",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backup-type\": \"{{backup_type}}\",\n  \"backup-id\": \"{{backup_id}}\",\n  \"backup-time\": {{backup_time}},\n  \"notes\": \"My backup notes here\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/notes",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","notes"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Snapshot Protected Flag",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backup-type\": \"{{backup_type}}\",\n  \"backup-id\": \"{{backup_id}}\",\n  \"backup-time\": {{backup_time}},\n  \"protected\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/protected",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","protected"]
+            },
+            "description": "Đánh dấu snapshot là protected (không bị prune xóa)."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Snapshot",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/snapshots?backup-type={{backup_type}}&backup-id={{backup_id}}&backup-time={{backup_time}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","snapshots"],
+              "query": [
+                { "key": "backup-type", "value": "{{backup_type}}" },
+                { "key": "backup-id",   "value": "{{backup_id}}" },
+                { "key": "backup-time", "value": "{{backup_time}}" }
+              ]
+            },
+            "description": "⚠️ Xóa snapshot vĩnh viễn. Không thể hoàn tác."
+          },
+          "response": []
+        },
+        {
+          "name": "Change Backup Group Owner",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backup-type\": \"{{backup_type}}\",\n  \"backup-id\": \"{{backup_id}}\",\n  \"new-owner\": \"newuser@pbs\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/change-owner",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","change-owner"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Catalog (File Browser)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/catalog?backup-type={{backup_type}}&backup-id={{backup_id}}&backup-time={{backup_time}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","catalog"],
+              "query": [
+                { "key": "backup-type", "value": "{{backup_type}}" },
+                { "key": "backup-id",   "value": "{{backup_id}}" },
+                { "key": "backup-time", "value": "{{backup_time}}" }
+              ]
+            },
+            "description": "Duyệt catalog file (danh mục file trong backup)."
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "🔧 Admin — Maintenance",
+      "description": "Garbage Collection, Verify, Prune",
+      "item": [
+        {
+          "name": "Start Garbage Collection",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/gc",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","gc"]
+            },
+            "description": "Chạy Garbage Collection để xóa chunks không dùng nữa."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Last GC Status",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/gc",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","gc"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Start Verification (All)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ignore-verified\": true,\n  \"outdated-after\": 30\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/verify",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","verify"]
+            },
+            "description": "Verify tất cả backups trong datastore."
+          },
+          "response": []
+        },
+        {
+          "name": "Start Verification (Snapshot)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backup-type\": \"{{backup_type}}\",\n  \"backup-id\": \"{{backup_id}}\",\n  \"backup-time\": {{backup_time}}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/verify",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","verify"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Prune Snapshots",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backup-type\": \"{{backup_type}}\",\n  \"backup-id\": \"{{backup_id}}\",\n  \"keep-last\": 0,\n  \"keep-daily\": 7,\n  \"keep-weekly\": 4,\n  \"keep-monthly\": 3,\n  \"keep-yearly\": 1,\n  \"dry-run\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/datastore/{{datastore}}/prune",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","datastore","{{datastore}}","prune"]
+            },
+            "description": "Prune snapshots theo retention policy.\n\n⚠️ `dry-run: true` để preview trước khi xóa thật."
+          },
+          "response": []
+        },
+        {
+          "name": "List Prune Jobs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/prune", "host": ["{{pbs_host}}"], "path": ["api2","json","config","prune"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Prune Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"{{prune_job_id}}\",\n  \"store\": \"{{datastore}}\",\n  \"ns\": \"{{namespace}}\",\n  \"schedule\": \"daily\",\n  \"keep-daily\": 7,\n  \"keep-weekly\": 4,\n  \"keep-monthly\": 3\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/config/prune", "host": ["{{pbs_host}}"], "path": ["api2","json","config","prune"] }
+          },
+          "response": []
+        },
+        {
+          "name": "List Verification Jobs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/verify", "host": ["{{pbs_host}}"], "path": ["api2","json","config","verify"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Verification Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"{{verify_job_id}}\",\n  \"store\": \"{{datastore}}\",\n  \"schedule\": \"weekly\",\n  \"ignore-verified\": true,\n  \"outdated-after\": 30\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/config/verify", "host": ["{{pbs_host}}"], "path": ["api2","json","config","verify"] }
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "📡 Admin — Sync & Remote",
+      "description": "Cấu hình và chạy sync jobs giữa các PBS servers",
+      "item": [
+        {
+          "name": "List Remotes",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/remote", "host": ["{{pbs_host}}"], "path": ["api2","json","config","remote"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Remote",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"remote-pbs\",\n  \"host\": \"192.168.2.100\",\n  \"port\": 8007,\n  \"userid\": \"root@pam\",\n  \"password\": \"remote_password\",\n  \"comment\": \"Offsite PBS\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/config/remote", "host": ["{{pbs_host}}"], "path": ["api2","json","config","remote"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Read Remote",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/config/remote/{{remote}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","config","remote","{{remote}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Sync Jobs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/sync", "host": ["{{pbs_host}}"], "path": ["api2","json","config","sync"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Sync Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"sync-offsite\",\n  \"store\": \"{{datastore}}\",\n  \"remote\": \"remote-pbs\",\n  \"remote-store\": \"remotestore\",\n  \"schedule\": \"daily\",\n  \"remove-vanished\": false,\n  \"comment\": \"Nightly offsite sync\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/config/sync", "host": ["{{pbs_host}}"], "path": ["api2","json","config","sync"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Run Sync Job Now",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/admin/sync/{{sync_job_id}}/run",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","admin","sync","{{sync_job_id}}","run"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Sync Job",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/config/sync/{{sync_job_id}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","config","sync","{{sync_job_id}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "👥 Access — Users & ACL",
+      "description": "Quản lý users, roles, ACL permissions",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/access/users", "host": ["{{pbs_host}}"], "path": ["api2","json","access","users"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userid\": \"{{userid}}\",\n  \"password\": \"SecurePass123!\",\n  \"comment\": \"New PBS user\",\n  \"email\": \"user@example.com\",\n  \"enabled\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/access/users", "host": ["{{pbs_host}}"], "path": ["api2","json","access","users"] },
+            "description": "Tạo user PBS.\n\n**Realm phổ biến:**\n- `@pbs`: PBS internal realm\n- `@pam`: Linux PAM\n- `@ldap`: LDAP realm"
+          },
+          "response": []
+        },
+        {
+          "name": "Get User",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/access/users/{{userid}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","access","users","{{userid}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"comment\": \"Updated user\",\n  \"enabled\": true,\n  \"email\": \"updated@example.com\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/access/users/{{userid}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","access","users","{{userid}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/access/users/{{userid}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","access","users","{{userid}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Change User Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userid\": \"{{userid}}\",\n  \"password\": \"NewSecurePass456!\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/access/password", "host": ["{{pbs_host}}"], "path": ["api2","json","access","password"] }
+          },
+          "response": []
+        },
+        {
+          "name": "List ACLs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/access/acl",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","access","acl"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update ACL (Add Permission)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"/datastore/{{datastore}}\",\n  \"userid\": \"{{userid}}\",\n  \"role\": \"DatastoreBackup\",\n  \"propagate\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/access/acl", "host": ["{{pbs_host}}"], "path": ["api2","json","access","acl"] },
+            "description": "Gán role cho user trên path.\n\n**Roles phổ biến:**\n- `Admin`: toàn quyền\n- `DatastoreAdmin`: quản lý datastore\n- `DatastoreBackup`: upload backups\n- `DatastoreReader`: download/restore\n- `DatastoreAudit`: xem stats\n- `Sys.Modify`: tạo users, ACL\n- `Sys.Audit`: đọc cấu hình\n\n**Paths:**\n- `/`: toàn bộ server\n- `/datastore`: tất cả datastores\n- `/datastore/{store}`: một datastore\n- `/datastore/{store}/{namespace}`: một namespace"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete ACL",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"/datastore/{{datastore}}\",\n  \"userid\": \"{{userid}}\",\n  \"role\": \"DatastoreBackup\",\n  \"delete\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/access/acl", "host": ["{{pbs_host}}"], "path": ["api2","json","access","acl"] }
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "⚙️ Config",
+      "description": "Cấu hình server: network, notifications, certificates, traffic control",
+      "item": [
+        {
+          "name": "Get Node Config",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/config", "host": ["{{pbs_host}}"], "path": ["api2","json","nodes","{{node}}","config"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Node Config (Email, Locale)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email-from\": \"pbs@example.com\",\n  \"http-proxy\": \"\",\n  \"notify\": \"always\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/config", "host": ["{{pbs_host}}"], "path": ["api2","json","nodes","{{node}}","config"] }
+          },
+          "response": []
+        },
+        {
+          "name": "List Network Interfaces",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/network", "host": ["{{pbs_host}}"], "path": ["api2","json","nodes","{{node}}","network"] }
+          },
+          "response": []
+        },
+        {
+          "name": "List Traffic Control",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/traffic-control", "host": ["{{pbs_host}}"], "path": ["api2","json","config","traffic-control"] }
+          },
+          "response": []
+        },
+        {
+          "name": "List Notification Targets",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/notifications", "host": ["{{pbs_host}}"], "path": ["api2","json","config","notifications"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Get ACME/Let's Encrypt Config",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/certificates/acme/plugins", "host": ["{{pbs_host}}"], "path": ["api2","json","nodes","{{node}}","certificates","acme","plugins"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Get TLS Certificate Info",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/certificates", "host": ["{{pbs_host}}"], "path": ["api2","json","nodes","{{node}}","certificates"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Upload Custom Certificate",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" },
+              { "key": "Content-Type",        "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"certificates\": \"-----BEGIN CERTIFICATE-----\\n...\\n-----END CERTIFICATE-----\",\n  \"key\": \"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\",\n  \"restart\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/api2/json/nodes/{{node}}/certificates/custom", "host": ["{{pbs_host}}"], "path": ["api2","json","nodes","{{node}}","certificates","custom"] }
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "📼 Tape Backup",
+      "description": "Quản lý tape drives, changers, media pools, tape jobs",
+      "item": [
+        {
+          "name": "List Tape Drives",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/tape-encryption-keys", "host": ["{{pbs_host}}"], "path": ["api2","json","config","tape-encryption-keys"] }
+          },
+          "response": []
+        },
+        {
+          "name": "List Tape Changers",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/changer", "host": ["{{pbs_host}}"], "path": ["api2","json","config","changer"] }
+          },
+          "response": []
+        },
+        {
+          "name": "List Media Pools",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/media-pool", "host": ["{{pbs_host}}"], "path": ["api2","json","config","media-pool"] }
+          },
+          "response": []
+        },
+        {
+          "name": "List Tape Backup Jobs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/config/tape-job", "host": ["{{pbs_host}}"], "path": ["api2","json","config","tape-job"] }
+          },
+          "response": []
+        },
+        {
+          "name": "Run Tape Backup Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",      "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "CSRFPreventionToken", "value": "{{csrf_token}}" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/tape/backup",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","tape","backup"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Tape Inventory",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/api2/json/tape/media/list", "host": ["{{pbs_host}}"], "path": ["api2","json","tape","media","list"] }
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "🔁 Backup Protocol (HTTP/2 Upgrade)",
+      "description": "Protocol để upload backup qua HTTP/2.\n\n⚠️ QUAN TRỌNG: Các request này KHÔNG thể thực hiện trực tiếp bằng Postman vì:\n1. Cần HTTP/1.1 UPGRADE → HTTP/2 switching protocol\n2. Postman không hỗ trợ custom protocol upgrade headers\n3. Phải dùng proxmox-backup-client hoặc code tùy chỉnh\n\nRequests bên dưới là REFERENCE documentation — hiển thị parameters, không thể chạy trực tiếp.",
+      "item": [
+        {
+          "name": "[REF] Upgrade to Backup Protocol",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "UPGRADE",       "value": "proxmox-backup-protocol-v1", "description": "HTTP/1.1 UPGRADE header — không support trong Postman" },
+              { "key": "Connection",    "value": "Upgrade" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/backup?backup-type={{backup_type}}&backup-id={{backup_id}}&backup-time={{backup_time}}&store={{datastore}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","backup"],
+              "query": [
+                { "key": "backup-type", "value": "{{backup_type}}" },
+                { "key": "backup-id",   "value": "{{backup_id}}" },
+                { "key": "backup-time", "value": "{{backup_time}}", "description": "Unix timestamp (current time)" },
+                { "key": "store",       "value": "{{datastore}}" },
+                { "key": "ns",          "value": "{{namespace}}", "disabled": true }
+              ]
+            },
+            "description": "⚠️ Chỉ là reference — không thể chạy trong Postman.\n\nServer trả về HTTP 101 Switching Protocols, sau đó bạn dùng HTTP/2 connection để:\n1. `POST /blob` — upload blob file (.blob)\n2. `POST /fixed_index` — tạo fixed index (.fidx, cho VM images)\n3. `POST /fixed_chunk` — upload chunk\n4. `PUT /fixed_index` — append chunk vào index\n5. `POST /fixed_close` — đóng index\n6. `POST /dynamic_index` — tạo dynamic index (.didx, cho file archives)\n7. `POST /dynamic_chunk` — upload chunk\n8. `PUT /dynamic_index` — append chunk vào index\n9. `POST /dynamic_close` — đóng index\n10. `POST /finish` — commit backup, kết thúc session\n\n**Dùng proxmox-backup-client thay thế:**\n```bash\nproxmox-backup-client backup vm.pbs:vm-disk0.img \\\n  --repository user@pbs@pbs-server:datastore \\\n  --backup-type vm --backup-id 100\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "[REF] POST /blob — Upload Blob",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "Content-Type",  "value": "application/octet-stream" }
+            ],
+            "body": { "mode": "raw", "raw": "<binary blob data>" },
+            "url": {
+              "raw": "{{pbs_host}}/blob?file-name=myfile.blob",
+              "host": ["{{pbs_host}}"],
+              "path": ["blob"],
+              "query": [{ "key": "file-name", "value": "myfile.blob", "description": "Must end with .blob" }]
+            },
+            "description": "Chỉ gửi được sau khi đã upgrade connection sang HTTP/2.\n\nBody chứa dữ liệu encode theo Data Blob format.\nFile name phải kết thúc bằng .blob"
+          },
+          "response": []
+        },
+        {
+          "name": "[REF] POST /fixed_index — Create Fixed Index",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"archive-name\": \"drive-scsi0.img.fidx\",\n  \"size\": 10737418240,\n  \"chunk-size\": 4194304,\n  \"reuse-csum\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/fixed_index", "host": ["{{pbs_host}}"], "path": ["fixed_index"] },
+            "description": "Tạo fixed index cho VM disk image. File phải kết thúc bằng .fidx\n\n- `size`: tổng kích thước image\n- `chunk-size`: kích thước mỗi chunk"
+          },
+          "response": []
+        },
+        {
+          "name": "[REF] POST /dynamic_index — Create Dynamic Index",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"archive-name\": \"home.pxar.didx\",\n  \"chunk-size\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{pbs_host}}/dynamic_index", "host": ["{{pbs_host}}"], "path": ["dynamic_index"] },
+            "description": "Tạo dynamic index cho file archives (.pxar). File phải kết thúc bằng .didx"
+          },
+          "response": []
+        },
+        {
+          "name": "[REF] POST /finish — Commit Backup",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": { "raw": "{{pbs_host}}/finish", "host": ["{{pbs_host}}"], "path": ["finish"] },
+            "description": "Commit toàn bộ data đã upload, kết thúc backup session.\nTạo file index.json (manifest) tự động."
+          },
+          "response": []
+        }
+      ]
+    },
+
+    {
+      "name": "📖 Reader Protocol (HTTP/2 Upgrade)",
+      "description": "Protocol để download/restore backup qua HTTP/2.\n\n⚠️ Tương tự Backup Protocol — cần HTTP/2 upgrade, không chạy trực tiếp trong Postman.",
+      "item": [
+        {
+          "name": "[REF] Upgrade to Reader Protocol",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" },
+              { "key": "UPGRADE",       "value": "proxmox-backup-reader-protocol-v1" },
+              { "key": "Connection",    "value": "Upgrade" }
+            ],
+            "url": {
+              "raw": "{{pbs_host}}/api2/json/reader?backup-type={{backup_type}}&backup-id={{backup_id}}&backup-time={{backup_time}}&store={{datastore}}",
+              "host": ["{{pbs_host}}"],
+              "path": ["api2","json","reader"],
+              "query": [
+                { "key": "backup-type", "value": "{{backup_type}}" },
+                { "key": "backup-id",   "value": "{{backup_id}}" },
+                { "key": "backup-time", "value": "{{backup_time}}" },
+                { "key": "store",       "value": "{{datastore}}" },
+                { "key": "ns",          "value": "{{namespace}}", "disabled": true }
+              ]
+            },
+            "description": "Upgrade connection để restore/read backup.\n\nSau khi upgrade, có thể dùng:\n1. `GET /download?file-name=xyz.blob` — download blob\n2. `GET /download?file-name=xyz.fidx` — download fixed index\n3. `GET /download?file-name=xyz.didx` — download dynamic index\n4. `GET /chunk?digest=sha256hex` — download chunk theo digest\n5. `GET /speedtest` — test băng thông\n\n**Restore bằng proxmox-backup-client:**\n```bash\nproxmox-backup-client restore vm/100/<timestamp>/drive-scsi0.img.fidx /tmp/restore.img \\\n  --repository user@pbs@pbs-server:datastore\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "[REF] GET /download — Download File",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/download?file-name=drive-scsi0.img.fidx",
+              "host": ["{{pbs_host}}"],
+              "path": ["download"],
+              "query": [{ "key": "file-name", "value": "drive-scsi0.img.fidx" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "[REF] GET /chunk — Download Chunk",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "PBSAPIToken={{token_id}}:{{token_secret}}" }],
+            "url": {
+              "raw": "{{pbs_host}}/chunk?digest=sha256hexdigest",
+              "host": ["{{pbs_host}}"],
+              "path": ["chunk"],
+              "query": [{ "key": "digest", "value": "sha256hexdigest", "description": "SHA256 hex digest của chunk" }]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
